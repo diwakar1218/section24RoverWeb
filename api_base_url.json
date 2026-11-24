@@ -1,0 +1,5 @@
+{
+  "mode": "local",
+  "localBaseUrl": "http://127.0.0.1:5082",
+  "serverBaseUrl": "https://rccms.up.gov.in/SurveyMonitoring_API"
+}

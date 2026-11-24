@@ -1,0 +1,65 @@
+import { test, expect } from "@playwright/test";
+import { readFile } from "node:fs/promises";
+
+test("daily report filters cascade through Bhulekh, group, sort, export and print all rows", async ({ page }) => {
+  const seen: URL[] = [];
+  const userId = "10000000-0000-0000-0000-000000000001";
+  const rows = [1, 2].map(i => ({ day: "2026-11-18", district: "आगरा", tehsil: "Tehsil A", village: "Village A", userId, userName: "Surveyor One", loginName: "surveyor01", rover: "DA2-" + i, surveys: 1, completed: 1, points: 3, trackPositions: 0, areaM2: 123.45, distanceM: 45.5 }));
+  await page.route("**/api/v1/**", async route => {
+    const url = new URL(route.request().url()); seen.push(url);
+    const headers = { "Access-Control-Allow-Origin": new URL(test.info().project.use.baseURL as string).origin, "Access-Control-Allow-Credentials": "true", "Access-Control-Allow-Headers": "Authorization,Content-Type" };
+    if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers });
+    let body: unknown = {};
+    if (url.pathname.endsWith("/auth/refresh")) body = { accessToken: "browser-fixture-token" };
+    else if (url.pathname.endsWith("/auth/me")) body = { userId, organizationId: userId, name: "Report tester", grants: [{ permission: "reports.read", scope: "Organization" }] };
+    else if (url.pathname.endsWith("/land-records/district")) body = [{ code: "200", name: "Zila Z", englishName: "Zila Z" }, { code: "146", name: "आगरा", englishName: "Agra" }];
+    else if (url.pathname.endsWith("/land-records/tehsil")) body = [{ code: "00766", name: "Tehsil A" }];
+    else if (url.pathname.endsWith("/land-records/village")) body = [{ code: "124639", name: "Village A" }];
+    else if (url.pathname.endsWith("/daily-work/export")) return route.fulfill({ status: 200, headers, contentType: "text/csv", body: "\uFEFFDate,User,Rover\r\n2026-11-18,Surveyor One,DA2-1\r\n2026-11-18,Surveyor One,DA2-2\r\n" });
+    else if (url.pathname.endsWith("/daily-work")) body = { from: url.searchParams.get("from"), to: url.searchParams.get("to"), timeZone: "Asia/Kolkata", groupBy: url.searchParams.get("groupBy"), totals: { surveys: 2, completed: 2, points: 6, trackPositions: 0, areaM2: 246.9, distanceM: 91, users: 1, rovers: 2 }, users: [{ code: userId, name: "Surveyor One (surveyor01)" }], rovers: [{ code: "DA2-1", name: "DA2-1" }, { code: "DA2-2", name: "DA2-2" }], totalRows: 2, page: 1, pageSize: 25, rows };
+    return route.fulfill({ status: 200, headers, contentType: "application/json", body: JSON.stringify(body) });
+  });
+  await page.goto("/dashboard/reports");
+  await expect(page.getByRole("heading", { name: "Daily work reports." })).toBeVisible();
+  await expect(page.locator(".report-results tbody tr")).toHaveCount(2);
+  await expect(page.locator(".report-filters").getByRole("button", { name: "Tehsil", exact: true })).toBeDisabled();
+  await page.locator(".report-filters").getByRole("button", { name: "District", exact: true }).click();
+  await page.getByRole("textbox", { name: "Search District" }).fill("Agra");
+  await page.getByRole("option", { name: /Agra/ }).click();
+  await page.locator(".report-filters").getByRole("button", { name: "Tehsil", exact: true }).click();
+  await page.getByRole("option", { name: "Tehsil A", exact: true }).click();
+  await page.locator(".report-filters").getByRole("button", { name: "Village", exact: true }).click();
+  await page.getByRole("textbox", { name: "Search Village" }).fill("Village A");
+  await page.getByRole("option", { name: "Village A", exact: true }).click();
+  expect(seen.some(u => u.pathname.endsWith("/tehsil") && u.searchParams.get("dcc") === "146")).toBeTruthy();
+  expect(seen.some(u => u.pathname.endsWith("/village") && u.searchParams.get("dcc") === "146" && u.searchParams.get("tcc") === "00766")).toBeTruthy();
+  await expect(page.getByRole("button", { name: "Export all · CSV / Excel" })).toBeDisabled();
+  await page.getByRole("button", { name: "Generate report", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Export all · CSV / Excel" })).toBeEnabled();
+  expect(seen.some(u => u.pathname.endsWith("/daily-work") && u.searchParams.get("villageCode") === "124639")).toBeTruthy();
+  await page.locator(".report-filters").getByRole("button", { name: "Report view", exact: true }).click();
+  await page.getByRole("option", { name: "Rover wise", exact: true }).click();
+  await page.getByRole("button", { name: "Generate report", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Rover wise", exact: true })).toBeVisible();
+  await expect(page.locator(".report-results th").filter({ hasText: "District" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Points", exact: true }).click();
+  await expect.poll(() => seen.some(u => u.searchParams.get("sort") === "points")).toBeTruthy();
+  const downloaded = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export all · CSV / Excel" }).click();
+  const download = await downloaded;
+  expect(download.suggestedFilename()).toMatch(/^daily-work-.*\.csv$/);
+  expect(await readFile((await download.path())!, "utf8")).toContain("DA2-2");
+  expect(seen.findLast(u => u.pathname.endsWith("/export"))?.searchParams.get("villageCode")).toBe("124639");
+  await page.evaluate(() => { (window as unknown as { printCalled: boolean }).printCalled = false; window.print = () => { (window as unknown as { printCalled: boolean }).printCalled = true; }; });
+  await page.getByRole("button", { name: "Print / PDF", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { printCalled: boolean }).printCalled)).toBeTruthy();
+  await expect(page.locator(".report-print tbody tr")).toHaveCount(2);
+  for (const width of [1440, 1024, 768, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  }
+  await page.locator(".report-filters").getByRole("button", { name: "District", exact: true }).click();
+  await page.getByRole("option", { name: "All districts", exact: true }).click();
+  await expect(page.locator(".report-filters").getByRole("button", { name: "Tehsil", exact: true })).toBeDisabled();
+  await expect(page.locator(".report-filters").getByRole("button", { name: "Village", exact: true })).toBeDisabled();
+});

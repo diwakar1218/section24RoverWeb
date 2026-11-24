@@ -1,0 +1,29 @@
+API BASE URL SETTINGS
+
+Edit api_base_url.json in the web application folder:
+
+  "mode": "local"   -> localBaseUrl (http://127.0.0.1:5082)
+  "mode": "server"  -> serverBaseUrl (hosted SurveyMonitoring_API)
+
+Enter the API root, without /api/v1, /health or /swagger/index.html.
+The web server reads this file at runtime for login, API requests and SignalR.
+No web rebuild is needed to change these URLs or select another mode.
+After switching backends, sign out and sign in with that backend's user account.
+The local and hosted databases can have different users and survey records.
+
+LOCAL DEVELOPMENT (from the TrimbleSurveyMonitoring folder)
+  powershell -File Tools/Start-MobileApi.ps1
+  powershell -File Tools/Start-MobileWeb.ps1 -ApiMode local
+
+HOSTED API WITH LOCAL WEB
+  powershell -File Tools/Start-MobileWeb.ps1 -ApiMode server
+
+PRODUCTION PACKAGE
+Edit web/api_base_url.json; its default mode is server. Run Start_Web.cmd or
+Start_Web.sh. Those scripts use this file and do not hardcode an API URL.
+
+Optional environment overrides:
+  SURVEY_API_MODE selects local or server instead of the file's mode.
+  SURVEY_API_UPSTREAM overrides the selected URL with a custom API root.
+Keep NEXT_PUBLIC_API_URL empty so browser requests use the web origin and
+the session-cookie login proxy. API URL settings do not contain passwords.
